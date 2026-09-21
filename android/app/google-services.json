@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "388637855338",
+    "project_id": "safeboard-28745",
+    "storage_bucket": "safeboard-28745.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:388637855338:android:f8acbfcf976e811f690413",
+        "android_client_info": {
+          "package_name": "com.example.safeboard_conductor"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCVqxwD7GoSY0vet4of7unSqC32OyEbhM4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:388637855338:android:86b1f5ca8631a1fb690413",
+        "android_client_info": {
+          "package_name": "com.nsbm.safeboard.safeboard"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCVqxwD7GoSY0vet4of7unSqC32OyEbhM4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
