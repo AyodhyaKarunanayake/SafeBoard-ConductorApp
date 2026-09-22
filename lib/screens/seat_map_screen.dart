@@ -5,10 +5,13 @@ import '../app_theme.dart';
 import '../models/occupancy_summary.dart';
 import '../models/seat_allocation.dart';
 import '../models/seat_map_layout.dart';
+import '../models/standing_ranking.dart';
 import '../models/zone.dart';
 import '../providers/journey_stream_provider.dart';
+import '../providers/reference_data_provider.dart';
 import '../utils/format.dart';
 import '../widgets/trip_gate.dart';
+import 'empty_seat_dialog.dart';
 
 /// Read-only live seat map of the active trip, built from its active seat
 /// allocations and laid out like the passenger app's 64-seat bus.
@@ -67,7 +70,9 @@ class _SeatMap extends StatelessWidget {
         const SizedBox(height: 12),
         Text(
           'Filled seats are occupied. An orange dot marks a passenger moved from '
-          'Priority to General because the last Priority seats were held back. Tap a seat for details.',
+          'Priority to General because the last Priority seats were held back. '
+          'Tap an occupied seat for its details, or an empty one to offer it to a '
+          'standing passenger.',
           style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
         ),
         const SizedBox(height: 16),
@@ -275,10 +280,11 @@ class _SeatCell extends StatelessWidget {
       ],
     );
 
-    if (!occupied) return marked;
     return InkWell(
       borderRadius: BorderRadius.circular(8),
-      onTap: () => showAllocationDetails(context, allocation!),
+      onTap: () => occupied
+          ? showAllocationDetails(context, allocation!)
+          : offerEmptySeat(context, seat),
       child: marked,
     );
   }
@@ -312,6 +318,37 @@ class _StandingSlot extends StatelessWidget {
       onTap: () => showAllocationDetails(context, allocation!),
       child: slot,
     );
+  }
+}
+
+/// Offers an empty seat to a standing passenger, on demand — works for any
+/// empty seat at any time, not only the moment one frees up (that live pop-up
+/// is easy to miss, or the conductor's trip may not have been running yet when
+/// the passenger who used to sit there ended their journey). Reuses the exact
+/// same ranking and Firestore write as the automatic prompt.
+Future<void> offerEmptySeat(BuildContext context, String seat) async {
+  final trip = context.read<JourneyStreamProvider>();
+  final journey = trip.journey;
+  if (journey == null) return;
+
+  final reference = context.read<ReferenceDataProvider>();
+  final candidates = rankStandingPassengers(
+    standing: trip.standingPassengers,
+    stopsInTravelOrder: reference.stopsForBus(reference.busById(journey.busId)),
+    currentStop: journey.currentStop,
+    route: reference.route,
+  );
+
+  final assigned = await showEmptySeatPrompt(
+    context,
+    seat: seat,
+    zone: Zone.fromSeatNumber(seat),
+    candidates: candidates,
+  );
+  if (assigned && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('Standing passenger moved to seat $seat.'),
+    ));
   }
 }
 

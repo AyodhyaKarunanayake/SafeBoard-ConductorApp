@@ -237,19 +237,17 @@ void main() {
       final event = provider.unannouncedSeatFreed.single;
       expect(event.seat, '5B');
       expect(event.wasSeated, isTrue);
-      expect(provider.unpromptedSeatFreed.single.id, event.id);
       expect(notifications.items.first.title, 'Passenger left');
       expect(notifications.items.first.body, 'Seat 5B is empty again.');
     });
 
-    test('a standing passenger leaving is announced but never offered a seat', () async {
+    test('a standing passenger leaving is announced with a different message', () async {
       await seedTrip();
       await db.doc('seat_allocations/s1').set(allocation('s1', 'Standing-1'));
       await bind();
       await release('s1');
 
       expect(provider.unannouncedSeatFreed.single.wasSeated, isFalse);
-      expect(provider.unpromptedSeatFreed, isEmpty);
       expect(notifications.items.first.body, contains('standing passenger'));
     });
 
@@ -291,7 +289,7 @@ void main() {
       expect(provider.standingPassengers, isEmpty);
     });
 
-    test('announced and prompted are tracked separately, per event', () async {
+    test('each freed-seat event is announced once, independently of the others', () async {
       await seedTrip();
       await db.doc('seat_allocations/a1').set(allocation('a1', '5B'));
       await db.doc('seat_allocations/a2').set(allocation('a2', '6A'));
@@ -301,11 +299,11 @@ void main() {
       expect(provider.unannouncedSeatFreed, hasLength(2));
 
       provider.markSeatFreedAnnounced(provider.unannouncedSeatFreed.first);
-      expect(provider.unannouncedSeatFreed, hasLength(1));
-      expect(provider.unpromptedSeatFreed, hasLength(2), reason: 'announcing does not consume the prompt');
+      expect(provider.unannouncedSeatFreed, hasLength(1),
+          reason: 'only the announced one drops out');
 
-      provider.markSeatFreedPrompted(provider.unpromptedSeatFreed.first);
-      expect(provider.unpromptedSeatFreed, hasLength(1));
+      provider.markSeatFreedAnnounced(provider.unannouncedSeatFreed.first);
+      expect(provider.unannouncedSeatFreed, isEmpty);
     });
 
     test('assigning through the provider updates the live lists', () async {
@@ -357,9 +355,131 @@ void main() {
       expect(cellColor(tester, '5B'), untouched);
       expect(find.text('General 0/15'), findsOneWidget);
     });
+
+    testWidgets('tapping an occupied seat still opens its details, not the empty-seat offer',
+        (tester) async {
+      await open(tester, const SeatMapScreen(), seed: (db) async {
+        await db.doc('journey_instances/JRN_1').set(journeyDoc());
+        await db.doc('seat_allocations/a1').set(allocationDoc('a1', '5B'));
+      });
+
+      await tester.tap(find.text('5B'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Seat 5B  ·  General'), findsOneWidget);
+      expect(find.byKey(const Key('empty-seat-title')), findsNothing);
+    });
+
+    testWidgets(
+        'tapping any empty seat offers it to standing passengers, even one that was never booked '
+        '(not just one that was just freed)', (tester) async {
+      final h = await open(tester, const SeatMapScreen(), seed: (db) async {
+        await db.doc('journey_instances/JRN_1').set(journeyDoc());
+        // 6A was never allocated at all - no "freed" event was ever raised for it.
+        await db.doc('seat_allocations/s1').set({...allocationDoc('s1', 'Standing-1'), 'alighting_stop': 'Jaffna Main Bus Stand'});
+      });
+
+      await tester.tap(find.text('6A'));
+      await tester.pumpAndSettle();
+
+      expect(tester.widget<Text>(find.byKey(const Key('empty-seat-title'))).data, 'Seat 6A is empty');
+      expect(find.text('Assign to 6A'), findsOneWidget);
+
+      await tester.tap(find.text('Assign to 6A'));
+      await settle(tester);
+      await tester.pumpAndSettle();
+
+      final doc = await tester.runAsync(() async => (await h.db.doc('seat_allocations/s1').get()).data()!);
+      expect(doc!['seat_number'], '6A');
+      expect(doc['allocation_type'], 'manual_override');
+      expect(find.text('Standing passenger moved to seat 6A.'), findsOneWidget);
+      expect(cellColor(tester, '6A'), isNot(cellColor(tester, '6B')), reason: '6A is now occupied, 6B is not');
+    });
+
+    testWidgets('tapping an empty seat with nobody standing explains that, instead of an empty list',
+        (tester) async {
+      await open(tester, const SeatMapScreen(), seed: (db) async {
+        await db.doc('journey_instances/JRN_1').set(journeyDoc());
+      });
+
+      await tester.tap(find.text('6A'));
+      await tester.pumpAndSettle();
+
+      expect(tester.widget<Text>(find.byKey(const Key('empty-seat-title'))).data, 'Seat 6A is empty');
+      expect(find.text('No standing passengers to move here at the moment.'), findsOneWidget);
+      expect(find.text('Assign to 6A'), findsNothing);
+
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('empty-seat-title')), findsNothing);
+    });
+
+    testWidgets('the conductor can pick a different standing passenger than the top-ranked one',
+        (tester) async {
+      final h = await open(tester, const SeatMapScreen(), seed: (db) async {
+        await db.doc('journey_instances/JRN_1').set(journeyDoc(stop: 'Puttalam Main Stand'));
+        await db.doc('seat_allocations/s1').set({...allocationDoc('s1', 'Standing-1'), 'alighting_stop': 'Anuradhapura New Town'});
+        await db.doc('seat_allocations/s2').set({...allocationDoc('s2', 'Standing-2'), 'alighting_stop': 'Jaffna Main Bus Stand'});
+        await db.doc('seat_allocations/s3').set({...allocationDoc('s3', 'Standing-3'), 'alighting_stop': 'Vavuniya Bus Terminal'});
+      });
+
+      await tester.tap(find.text('6A'));
+      await tester.pumpAndSettle();
+      expect(find.text('Travels furthest'), findsOneWidget); // s2, to Jaffna
+
+      // The second row's button is a plain "Assign", not "Assign to 6A".
+      await tester.tap(find.widgetWithText(OutlinedButton, 'Assign').first);
+      await settle(tester);
+      await tester.pumpAndSettle();
+
+      final doc = await tester.runAsync(() async => (await h.db.doc('seat_allocations/s3').get()).data()!);
+      expect(doc!['seat_number'], '6A', reason: 'the second-furthest, not the top-ranked one');
+    });
+
+    testWidgets('declining an offer (Not now) leaves everything as it is', (tester) async {
+      final h = await open(tester, const SeatMapScreen(), seed: (db) async {
+        await db.doc('journey_instances/JRN_1').set(journeyDoc(stop: 'Puttalam Main Stand'));
+        await db.doc('seat_allocations/s1').set({...allocationDoc('s1', 'Standing-1'), 'alighting_stop': 'Jaffna Main Bus Stand'});
+      });
+
+      await tester.tap(find.text('6A'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Not now'));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('empty-seat-title')), findsNothing);
+      final doc = await tester.runAsync(() async => (await h.db.doc('seat_allocations/s1').get()).data()!);
+      expect(doc!['seat_number'], 'Standing-1', reason: 'nothing was assigned');
+    });
+
+    testWidgets('if the seat is taken while the offer is open, it says so and stays open',
+        (tester) async {
+      final h = await open(tester, const SeatMapScreen(), seed: (db) async {
+        await db.doc('journey_instances/JRN_1').set(journeyDoc(stop: 'Puttalam Main Stand'));
+        await db.doc('seat_allocations/s1').set({...allocationDoc('s1', 'Standing-1'), 'alighting_stop': 'Jaffna Main Bus Stand'});
+      });
+
+      await tester.tap(find.text('6A'));
+      await tester.pumpAndSettle();
+
+      await tester.runAsync(() => h.db.doc('seat_allocations/late').set(allocationDoc('late', '6A')));
+      await settle(tester);
+
+      await tester.tap(find.text('Assign to 6A'));
+      await settle(tester);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Seat 6A has just been taken.'), findsOneWidget);
+      expect(find.byKey(const Key('empty-seat-title')), findsOneWidget);
+    });
   });
 
-  group('Passenger left: pop-up and seat offer', () {
+  group('Passenger left: instant alert (no automatic seat offer)', () {
+    // Filling a freed seat is the conductor's own call, made by talking to
+    // the standing passengers in person - the app's job stops at telling them
+    // the seat is empty. See the 'Seat map' group for the on-demand way a
+    // conductor records who they seated once they've decided, which reuses
+    // this exact ranking/assignment machinery but is never pushed automatically.
     Future<void> seedBus(FakeFirebaseFirestore db, {bool standing = true}) async {
       await db.doc('journey_instances/JRN_1').set(journeyDoc(stop: 'Puttalam Main Stand'));
       await db.doc('seat_allocations/a1').set(allocationDoc('a1', '5B'));
@@ -392,7 +512,8 @@ void main() {
       expect(find.text('Seat 5B is empty'), findsNothing, reason: 'gone after about 3 seconds');
     });
 
-    testWidgets('a standing passenger leaving gets the alert too, but no seat offer', (tester) async {
+    testWidgets('a standing passenger leaving gets its own message, and never an assignment dialog',
+        (tester) async {
       final h = await open(tester, const HomeShell(), seed: seedBus);
       await leave(h, tester, 's1');
       await tester.pump(const Duration(milliseconds: 600));
@@ -401,114 +522,13 @@ void main() {
       expect(find.byKey(const Key('empty-seat-title')), findsNothing);
     });
 
-    testWidgets('with nobody standing there is only the alert, no question', (tester) async {
-      final h = await open(tester, const HomeShell(), seed: (db) => seedBus(db, standing: false));
-      await leave(h, tester, 'a1');
-      await tester.pumpAndSettle();
-      expect(find.byKey(const Key('empty-seat-title')), findsNothing);
-    });
-
-    testWidgets('with standing passengers, asks who should get the seat: furthest-travelling first',
+    testWidgets('even with standing passengers available, no dialog is ever shown automatically',
         (tester) async {
       final h = await open(tester, const HomeShell(), seed: seedBus);
       await leave(h, tester, 'a1');
       await tester.pumpAndSettle();
-
-      expect(tester.widget<Text>(find.byKey(const Key('empty-seat-title'))).data, 'Seat 5B is empty');
-      expect(find.textContaining('3 passengers are standing'), findsOneWidget);
-
-      final far = tester.getTopLeft(find.text('Standing-2')).dy; // to Jaffna
-      final mid = tester.getTopLeft(find.text('Standing-3')).dy; // to Vavuniya
-      final near = tester.getTopLeft(find.text('Standing-1')).dy; // to Anuradhapura
-      expect(far, lessThan(mid));
-      expect(mid, lessThan(near));
-      expect(find.text('Travels furthest'), findsOneWidget);
-      expect(find.text('Assign to 5B'), findsOneWidget);
-      expect(find.textContaining('18 stops'), findsOneWidget, reason: 'Puttalam to Jaffna');
-    });
-
-    testWidgets('Assign to 5B moves the furthest-travelling passenger into the seat, and everything updates',
-        (tester) async {
-      final h = await open(tester, const HomeShell(), seed: seedBus);
-      await leave(h, tester, 'a1');
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.text('Assign to 5B'));
-      await settle(tester);
-      await tester.pumpAndSettle();
-
-      final doc = await tester.runAsync(() async => (await h.db.doc('seat_allocations/s2').get()).data()!);
-      expect(doc!['seat_number'], '5B');
-      expect(doc['allocation_type'], 'manual_override');
-      expect(find.byKey(const Key('empty-seat-title')), findsNothing, reason: 'dialog closed');
-      expect(h.journeys.allocationForSeat('5B')?.allocationId, 's2');
-      expect(h.journeys.standingPassengers.map((a) => a.allocationId).toSet(), {'s1', 's3'});
-    });
-
-    testWidgets('the conductor can pick a different standing passenger instead', (tester) async {
-      final h = await open(tester, const HomeShell(), seed: seedBus);
-      await leave(h, tester, 'a1');
-      await tester.pumpAndSettle();
-
-      // The second row's button is a plain "Assign".
-      await tester.tap(find.widgetWithText(OutlinedButton, 'Assign').first);
-      await settle(tester);
-      await tester.pumpAndSettle();
-
-      expect(h.journeys.allocationForSeat('5B')?.allocationId, 's3', reason: 'the second-furthest');
-    });
-
-    testWidgets('Not now leaves everything as it is', (tester) async {
-      final h = await open(tester, const HomeShell(), seed: seedBus);
-      await leave(h, tester, 'a1');
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.text('Not now'));
-      await tester.pumpAndSettle();
-
-      expect(find.byKey(const Key('empty-seat-title')), findsNothing);
-      expect(h.journeys.allocationForSeat('5B'), isNull);
-      expect(h.journeys.standingPassengers, hasLength(3));
-    });
-
-    testWidgets('if the seat is taken while the question is open, it says so and stays open',
-        (tester) async {
-      final h = await open(tester, const HomeShell(), seed: seedBus);
-      await leave(h, tester, 'a1');
-      await tester.pumpAndSettle();
-
-      await tester.runAsync(() => h.db.doc('seat_allocations/late').set(allocationDoc('late', '5B')));
-      await settle(tester);
-
-      await tester.tap(find.text('Assign to 5B'));
-      await settle(tester);
-      await tester.pumpAndSettle();
-
-      expect(find.text('Seat 5B has just been taken.'), findsOneWidget);
-      expect(find.byKey(const Key('empty-seat-title')), findsOneWidget);
-    });
-
-    testWidgets('two seats freed one after the other are asked about one at a time', (tester) async {
-      final h = await open(tester, const HomeShell(), seed: (db) async {
-        await seedBus(db);
-        await db.doc('seat_allocations/a2').set(allocationDoc('a2', '6A'));
-      });
-      await tester.runAsync(() async {
-        await h.db.doc('seat_allocations/a1').update({'status': 'released'});
-        await h.db.doc('seat_allocations/a2').update({'status': 'released'});
-      });
-      await settle(tester);
-      await tester.pumpAndSettle();
-
-      final first = tester.widget<Text>(find.byKey(const Key('empty-seat-title'))).data;
-      await tester.tap(find.text('Not now'));
-      await tester.pumpAndSettle();
-      final second = tester.widget<Text>(find.byKey(const Key('empty-seat-title'))).data;
-
-      expect({first, second}, {'Seat 5B is empty', 'Seat 6A is empty'});
-      await tester.tap(find.text('Not now'));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const Key('empty-seat-title')), findsNothing);
+      expect(find.byKey(const Key('empty-seat-title')), findsNothing,
+          reason: 'assigning a standing passenger is always the conductor\'s own, on-demand choice');
     });
 
     testWidgets('the alert also lands in the Alerts list', (tester) async {

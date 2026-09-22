@@ -6,12 +6,9 @@ import 'package:provider/provider.dart';
 import '../app_theme.dart';
 import '../providers/conductor_provider.dart';
 import '../providers/journey_stream_provider.dart';
-import '../models/standing_ranking.dart';
 import '../providers/notifications_provider.dart';
-import '../providers/reference_data_provider.dart';
 import '../utils/ui.dart';
 import 'cash_screen.dart';
-import 'empty_seat_dialog.dart';
 import 'incidents_screen.dart';
 import 'message_alert_dialog.dart';
 import 'messages_screen.dart';
@@ -45,6 +42,11 @@ class _HomeShellState extends State<HomeShell> {
   /// time, until none are left: an unacknowledged SOS first, then messages that
   /// arrived live. Each is shown once per session; messages also stay on the
   /// Messages page afterwards.
+  ///
+  /// A freed seat is NOT handled here: filling it is the conductor's call, made
+  /// in person, not something the app suggests. See _announceSeatFreed for the
+  /// instant "seat is empty" notice, and SeatMapScreen.offerEmptySeat for the
+  /// on-demand way to record who the conductor put there.
   Future<void> _showNextAlert() async {
     if (_alertOpen || !mounted) return;
     final trip = context.read<JourneyStreamProvider>();
@@ -81,40 +83,6 @@ class _HomeShellState extends State<HomeShell> {
       // A reply already marks the pop-up as handled; "Later" does it here.
       if (result == MessageAlertResult.later) {
         trip.markMessagePopupHandled(message);
-      }
-    } else if (trip.unpromptedSeatFreed.isNotEmpty) {
-      // A seat was freed: offer it to the standing passenger with the furthest
-      // to travel, if there is one. The conductor decides; nothing is automatic.
-      final event = trip.unpromptedSeatFreed.first;
-      trip.markSeatFreedPrompted(event);
-      final journey = trip.journey;
-      final reference = context.read<ReferenceDataProvider>();
-      final candidates =
-          journey == null || trip.allocationForSeat(event.seat) != null
-              ? const <StandingCandidate>[]
-              : rankStandingPassengers(
-                  standing: trip.standingPassengers,
-                  stopsInTravelOrder:
-                      reference.stopsForBus(reference.busById(journey.busId)),
-                  currentStop: journey.currentStop,
-                  route: reference.route,
-                );
-
-      if (candidates.isNotEmpty) {
-        _alertOpen = true;
-        final assigned = await showEmptySeatPrompt(
-          context,
-          seat: event.seat,
-          zone: event.allocation.zone,
-          candidates: candidates,
-        );
-        _alertOpen = false;
-        if (!mounted) return;
-        if (assigned) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Standing passenger moved to seat ${event.seat}.'),
-          ));
-        }
       }
     } else {
       return;
@@ -170,10 +138,8 @@ class _HomeShellState extends State<HomeShell> {
         context.select<JourneyStreamProvider, int>((p) => p.cashToCollect.length);
     final unreadMessages = context
         .select<JourneyStreamProvider, int>((p) => p.unreadMessageCount);
-    final alertsWaiting = context.select<JourneyStreamProvider, int>((p) =>
-        p.pendingSos.length +
-        p.pendingMessagePopups.length +
-        p.unpromptedSeatFreed.length);
+    final alertsWaiting = context.select<JourneyStreamProvider, int>(
+        (p) => p.pendingSos.length + p.pendingMessagePopups.length);
     final leftToAnnounce = context.select<JourneyStreamProvider, int>(
         (p) => p.unannouncedSeatFreed.length);
     final theme = Theme.of(context);

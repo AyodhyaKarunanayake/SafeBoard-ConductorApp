@@ -327,7 +327,8 @@ void main() {
   });
 
   group('Cash tab', () {
-    testWidgets('collecting a pay-on-board fare marks it completed', (tester) async {
+    testWidgets('tapping a fare opens its details, then Code to Confirm shows the boarding code and collects it',
+        (tester) async {
       final h = await open(tester, const CashScreen(), seed: (db) async {
         await db.doc('journey_instances/JRN_1').set(journeyDoc());
         await db.doc('seat_allocations/a1').set(allocationDoc('a1', '5D'));
@@ -341,20 +342,42 @@ void main() {
       expect(find.text('To collect (1)'), findsOneWidget);
       expect(find.text('LKR 1,450'), findsWidgets);
 
-      await tester.tap(find.widgetWithText(FilledButton, 'Collect'));
+      await tester.tap(find.text('Tap to collect'));
       await tester.pumpAndSettle();
-      expect(find.textContaining('Confirm you have received the cash from seat 5D'), findsOneWidget);
-      await tester.tap(find.widgetWithText(FilledButton, 'Collected'));
-      await settle(tester);
 
-      final doc = await tester.runAsync(() => h.read('payments/p1'));
+      // The passenger's details, identified by seat (the schema carries no name).
+      expect(find.widgetWithText(AppBar, 'Collect payment'), findsOneWidget);
+      expect(find.text('Seat 5D'), findsOneWidget);
+      expect(find.text('Awaiting payment'), findsOneWidget);
+      expect(find.text('Colombo (Pettah)'), findsOneWidget);
+      expect(find.text('Cash (pay on board)'), findsOneWidget);
+
+      // (FilledButton.icon is a private subclass, so match on the label.)
+      await tester.tap(find.text('Code to Confirm'));
+      await settle(tester);
+      await tester.pumpAndSettle();
+
+      // The payment is already written by the time the code appears.
+      var doc = await tester.runAsync(() => h.read('payments/p1'));
       expect(doc!['status'], 'completed');
       expect(doc['amount_lkr'], 1450.0);
+
+      expect(find.text('BOARDING CODE'), findsOneWidget);
+      expect(find.textContaining('seat 5D'), findsOneWidget);
+      expect(tester.widget<Text>(find.byKey(const Key('boarding-otp'))).data, '1  2  3  4');
+
+      await tester.tap(find.text('Done'));
+      await tester.pumpAndSettle();
+
+      // Back on the Cash tab, now showing as collected.
+      expect(find.widgetWithText(AppBar, 'Collect payment'), findsNothing);
       expect(find.text('To collect (0)'), findsOneWidget);
       expect(find.text('Collected (1)'), findsOneWidget);
+      doc = await tester.runAsync(() => h.read('payments/p1'));
+      expect(doc!['status'], 'completed');
     });
 
-    testWidgets('cancelling the dialog changes nothing', (tester) async {
+    testWidgets('backing out of the details screen without confirming changes nothing', (tester) async {
       final h = await open(tester, const CashScreen(), seed: (db) async {
         await db.doc('journey_instances/JRN_1').set(journeyDoc());
         await db.doc('seat_allocations/a1').set(allocationDoc('a1', '5D'));
@@ -364,12 +387,37 @@ void main() {
         });
       });
 
-      await tester.tap(find.widgetWithText(FilledButton, 'Collect'));
+      await tester.tap(find.text('Tap to collect'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Cancel'));
+      expect(find.text('Code to Confirm'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Back'));
       await settle(tester);
+      await tester.pumpAndSettle();
 
       expect((await tester.runAsync(() => h.read('payments/p1')))!['status'], 'pay_on_board');
+      expect(find.text('To collect (1)'), findsOneWidget);
+    });
+
+    testWidgets('a collected fare can be reopened to show the boarding code again', (tester) async {
+      await open(tester, const CashScreen(), seed: (db) async {
+        await db.doc('journey_instances/JRN_1').set(journeyDoc());
+        await db.doc('seat_allocations/a1').set(allocationDoc('a1', '5D'));
+        await db.doc('payments/p1').set({
+          'payment_id': 'p1', 'allocation_id': 'a1', 'journey_id': 'JRN_1', 'method': 'conductor',
+          'amount_lkr': 900.0, 'status': 'completed', 'timestamp': '2026-09-21T10:00:00.000Z',
+        });
+      });
+
+      await tester.tap(find.text('Tap to view'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Payment collected'), findsOneWidget);
+      expect(find.text('Code to Confirm'), findsNothing);
+
+      await tester.tap(find.text('Show boarding code again'));
+      await tester.pumpAndSettle();
+      expect(find.text('BOARDING CODE'), findsOneWidget);
     });
 
     testWidgets('an empty queue explains itself', (tester) async {

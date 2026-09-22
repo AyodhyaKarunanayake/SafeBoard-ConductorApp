@@ -85,10 +85,15 @@ class JourneyStreamProvider extends ChangeNotifier {
   final Set<String> _messagePopupHandled = {};
 
   // Passengers who ended their journey while the app was open, and which of
-  // them the conductor has been told about / offered a standing passenger for.
+  // them the conductor has already been told about.
+  //
+  // Filling the seat is a call the conductor makes in person (talk to the
+  // standing passengers, pick one); the app's job stops at telling them the
+  // seat is free. It does offer an on-demand way to record that choice once
+  // made — see SeatMapScreen.offerEmptySeat, which tapping any empty seat
+  // opens — but it never pushes a suggestion on its own.
   final List<SeatFreedEvent> _seatFreedEvents = [];
   final Set<String> _freedAnnounced = {};
-  final Set<String> _freedPrompted = {};
 
   bool _disposed = false;
 
@@ -142,17 +147,8 @@ class JourneyStreamProvider extends ChangeNotifier {
   List<SeatFreedEvent> get unannouncedSeatFreed =>
       _seatFreedEvents.where((e) => !_freedAnnounced.contains(e.id)).toList();
 
-  /// Freed real seats not yet offered to a standing passenger.
-  List<SeatFreedEvent> get unpromptedSeatFreed => _seatFreedEvents
-      .where((e) => e.wasSeated && !_freedPrompted.contains(e.id))
-      .toList();
-
   void markSeatFreedAnnounced(SeatFreedEvent event) {
     if (_freedAnnounced.add(event.id)) notifyListeners();
-  }
-
-  void markSeatFreedPrompted(SeatFreedEvent event) {
-    if (_freedPrompted.add(event.id)) notifyListeners();
   }
 
   /// Passenger messages for this trip's bus, newest first.
@@ -288,7 +284,6 @@ class JourneyStreamProvider extends ChangeNotifier {
     _messagePopupQueue.clear();
     _seatFreedEvents.clear();
     _freedAnnounced.clear();
-    _freedPrompted.clear();
   }
 
   void _onTripError(Object error) {
@@ -319,7 +314,14 @@ class JourneyStreamProvider extends ChangeNotifier {
         }
       }
       _detectPassengersWhoLeft(previousById);
-    } else if (!snapshot.metadata.isFromCache) {
+    } else {
+      // Prime on the very first snapshot, cache or not. Waiting specifically
+      // for a server-confirmed one (the old `!isFromCache` check) left a real
+      // gap: on a cold start, real Firestore often delivers one or more cached
+      // snapshots before the true one, and a passenger ending their journey
+      // during that window was silently folded into the baseline, with no
+      // alert ever raised for it. fake_cloud_firestore never marks a snapshot
+      // as from-cache, so no test could have caught this.
       _seenAllocations.addAll(items.map((a) => a.allocationId));
       _allocationsPrimed = true;
     }
@@ -379,7 +381,10 @@ class JourneyStreamProvider extends ChangeNotifier {
           }
         }
       }
-    } else if (!snapshot.metadata.isFromCache) {
+    } else {
+      // See the matching comment in _onAllocations: prime on the first
+      // snapshot regardless of cache status, so a live change can never be
+      // silently absorbed while waiting for a server-confirmed snapshot.
       _seenIncidents.addAll(items.map((i) => i.incidentId));
       _incidentsPrimed = true;
     }
@@ -404,7 +409,8 @@ class JourneyStreamProvider extends ChangeNotifier {
           _messagePopupQueue.add(m.messageId);
         }
       }
-    } else if (!snapshot.metadata.isFromCache) {
+    } else {
+      // See the matching comment in _onAllocations.
       _seenMessages.addAll(items.map((m) => m.messageId));
       _messagesPrimed = true;
     }
@@ -417,7 +423,8 @@ class JourneyStreamProvider extends ChangeNotifier {
     ];
     _tripError = null;
 
-    if (!_paymentsPrimed && !snapshot.metadata.isFromCache) {
+    if (!_paymentsPrimed) {
+      // See the matching comment in _onAllocations.
       _seenPayments.addAll(_payments.map((p) => p.paymentId));
       _paymentsPrimed = true;
     }

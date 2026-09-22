@@ -1,21 +1,17 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../app_theme.dart';
 import '../providers/journey_stream_provider.dart';
 import '../utils/format.dart';
-import '../utils/ui.dart';
 import '../widgets/status_message.dart';
 import '../widgets/status_pill.dart';
 import '../widgets/trip_gate.dart';
+import 'cash_collection_screen.dart';
 
-final NumberFormat _lkr = NumberFormat('#,##0');
-
-String formatLkr(double amount) => 'LKR ${_lkr.format(amount)}';
-
-/// Pay-on-board queue: fares passengers chose to pay to the conductor. The
-/// conductor marks each one collected once the cash is in hand.
+/// Pay-on-board queue: fares passengers chose to pay to the conductor. Tapping
+/// one opens its details, where the conductor confirms the cash and gets the
+/// passenger's boarding code.
 class CashScreen extends StatelessWidget {
   const CashScreen({super.key});
 
@@ -156,24 +152,10 @@ class _CashTile extends StatelessWidget {
   final CashItem item;
   final bool collectable;
 
-  Future<void> _collect(BuildContext context) async {
-    final payment = item.payment;
-    final trip = context.read<JourneyStreamProvider>();
-    final ok = await confirm(
-      context,
-      title: 'Collect ${formatLkr(payment.amountLkr)}?',
-      message:
-          'Confirm you have received the cash from seat ${item.allocation.seatNumber} '
-          '(${item.allocation.referenceCode}).',
-      confirmLabel: 'Collected',
+  void _open(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => CashCollectionScreen(item: item)),
     );
-    if (ok && context.mounted) {
-      await runAction(
-        context,
-        () => trip.collectPayment(payment),
-        success: 'Marked as collected.',
-      );
-    }
   }
 
   @override
@@ -185,69 +167,81 @@ class _CashTile extends StatelessWidget {
 
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: () => _open(context),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  collectable ? Icons.payments_rounded : Icons.check_circle_rounded,
+                  color: color,
+                  size: 22,
+                ),
               ),
-              child: Icon(
-                collectable ? Icons.payments_rounded : Icons.check_circle_rounded,
-                color: color,
-                size: 22,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 4,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      Text(formatLkr(item.payment.amountLkr),
-                          style: theme.textTheme.titleSmall),
-                      StatusPill(label: 'Seat ${a.seatNumber}', color: kMuted),
-                    ],
-                  ),
-                  if (hasStops) ...[
-                    const SizedBox(height: 6),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        Text(a.boardingStop, style: theme.textTheme.bodySmall),
-                        Icon(Icons.arrow_right_alt_rounded,
-                            size: 18, color: theme.colorScheme.outline),
-                        Text(a.alightingStop, style: theme.textTheme.bodySmall),
+                        Text(formatLkr(item.payment.amountLkr),
+                            style: theme.textTheme.titleSmall),
+                        StatusPill(label: 'Seat ${a.seatNumber}', color: kMuted),
                       ],
                     ),
+                    if (hasStops) ...[
+                      const SizedBox(height: 6),
+                      Wrap(
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          Text(a.boardingStop, style: theme.textTheme.bodySmall),
+                          Icon(Icons.arrow_right_alt_rounded,
+                              size: 18, color: theme.colorScheme.outline),
+                          Text(a.alightingStop, style: theme.textTheme.bodySmall),
+                        ],
+                      ),
+                    ],
+                    const SizedBox(height: 6),
+                    Text(
+                      '${a.referenceCode}  ·  ${formatDateTime(item.payment.timestamp)}',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.colorScheme.outline),
+                    ),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            collectable ? 'Tap to collect' : 'Tap to view',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.primary,
+                                fontWeight: FontWeight.w600),
+                          ),
+                          Icon(Icons.chevron_right_rounded,
+                              size: 18, color: theme.colorScheme.primary),
+                        ],
+                      ),
+                    ),
                   ],
-                  const SizedBox(height: 6),
-                  Text(
-                    '${a.referenceCode}  ·  ${formatDateTime(item.payment.timestamp)}',
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: theme.colorScheme.outline),
-                  ),
-                ],
-              ),
-            ),
-            if (collectable) ...[
-              const SizedBox(width: 12),
-              FilledButton.tonal(
-                onPressed: () => _collect(context),
-                style: FilledButton.styleFrom(minimumSize: const Size(0, 40)),
-                child: const Text('Collect'),
+                ),
               ),
             ],
-          ],
+          ),
         ),
       ),
     );

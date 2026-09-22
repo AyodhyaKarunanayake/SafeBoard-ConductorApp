@@ -7,9 +7,13 @@ import '../models/zone.dart';
 import '../providers/journey_stream_provider.dart';
 import '../widgets/status_pill.dart';
 
-/// Offers a freed seat to the standing passengers, furthest-travelling first.
-/// Resolves to true if the conductor gave the seat to someone. The conductor
-/// always chooses: nothing is assigned automatically.
+/// Offers an empty seat to the standing passengers, furthest-travelling first.
+/// Only ever opened on demand — by the conductor tapping an empty seat on the
+/// map (see SeatMapScreen.offerEmptySeat) — never automatically: deciding who
+/// sits there is the conductor's own call, made in person, not the app's.
+/// Resolves to true if the conductor gave the seat to someone. Handles there
+/// being nobody standing gracefully, with a plain message instead of an empty
+/// list.
 Future<bool> showEmptySeatPrompt(
   BuildContext context, {
   required String seat,
@@ -109,43 +113,61 @@ class _EmptySeatDialogState extends State<EmptySeatDialog> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '$count passenger${count == 1 ? ' is' : 's are'} standing. '
-                    'Give the seat to the one with the furthest to travel?',
+                    count == 0
+                        ? 'Nobody is standing right now — check back once someone is.'
+                        : '$count passenger${count == 1 ? ' is' : 's are'} standing. '
+                            'Give the seat to the one with the furthest to travel?',
                     textAlign: TextAlign.center,
                     style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.3),
                   ),
                 ],
               ),
             ),
-            Flexible(
-              child: ListView(
-                shrinkWrap: true,
-                padding: const EdgeInsets.all(16),
-                children: [
-                  for (var i = 0; i < widget.candidates.length; i++)
-                    _CandidateRow(
-                      candidate: widget.candidates[i],
-                      best: i == 0,
-                      seat: widget.seat,
-                      distance: _distanceText(widget.candidates[i]),
-                      busy: busy,
-                      assigning:
-                          _assigningId == widget.candidates[i].allocation.allocationId,
-                      onAssign: () => _assign(widget.candidates[i]),
-                    ),
-                  if (_error != null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text(_error!, style: TextStyle(color: scheme.error)),
-                    ),
-                ],
+            if (widget.candidates.isEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 20, 24, 4),
+                child: Column(
+                  children: [
+                    Icon(Icons.accessibility_new_rounded,
+                        size: 36, color: theme.colorScheme.outline),
+                    const SizedBox(height: 8),
+                    Text('No standing passengers to move here at the moment.',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: theme.colorScheme.outline)),
+                  ],
+                ),
+              )
+            else
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    for (var i = 0; i < widget.candidates.length; i++)
+                      _CandidateRow(
+                        candidate: widget.candidates[i],
+                        best: i == 0,
+                        seat: widget.seat,
+                        distance: _distanceText(widget.candidates[i]),
+                        busy: busy,
+                        assigning:
+                            _assigningId == widget.candidates[i].allocation.allocationId,
+                        onAssign: () => _assign(widget.candidates[i]),
+                      ),
+                    if (_error != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(_error!, style: TextStyle(color: scheme.error)),
+                      ),
+                  ],
+                ),
               ),
-            ),
             Padding(
-              padding: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.only(bottom: 8, top: 8),
               child: TextButton(
                 onPressed: busy ? null : () => Navigator.of(context).pop(false),
-                child: const Text('Not now'),
+                child: Text(count == 0 ? 'Close' : 'Not now'),
               ),
             ),
           ],
